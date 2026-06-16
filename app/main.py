@@ -1,7 +1,7 @@
 import logging
 # pyrefly: ignore [missing-import]
 from fastapi import FastAPI
-from app.api.routes import datasets
+from app.api.routes import datasets, health
 from app.core.config import settings
 
 # Configure logging format and level
@@ -26,6 +26,13 @@ app.include_router(
     datasets.router,
     prefix="/api/v1/datasets",
     tags=["datasets"]
+)
+
+# Mount health check router
+app.include_router(
+    health.router,
+    prefix="/api/v1/health",
+    tags=["health"]
 )
 
 @app.get("/")
