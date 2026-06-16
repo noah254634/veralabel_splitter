@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+python-dotenv
+motor
+boto3
+aiofiles
+python-multipart
