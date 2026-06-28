@@ -1,3 +1,13 @@
+---
+title: Veralabel Splitter
+emoji: ✂️
+colorFrom: indigo
+colorTo: purple
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # VeraLabel Dataset Splitter & Assembler Service
 
 VeraLabel Splitter is a high-performance **FastAPI** service engineered to offload computationally heavy data operations from the main backend. It manages large-scale dataset ingestion, validation, splitting (by audio chunks, text lines, or RLHF nodes), and subsequent compilation (consensus adjudication, zipping, and secure upload to Cloudflare R2).
