@@ -48,16 +48,17 @@ def infer_task_type(content_type: str) -> str:
         return 'video'
     return 'text'
 
-def process_media_zip(zip_bytes: bytes, project_id: str, dataset_id: str) -> dict:
+def process_media_zip(zip_path: str, project_id: str, dataset_id: str) -> dict:
     """
     Process zipped media dataset (images, videos, etc.), extracting, uploading to R2, and registering batches.
     """
+    from threading import BoundedSemaphore
     progress_logger = ProgressLogger(project_id, dataset_id)
     progress_logger.log("Starting media ZIP processing (Python FastAPI)")
     
     try:
-        # Load zip in memory
-        zip_file = zipfile.ZipFile(io.BytesIO(zip_bytes))
+        # Open zip directly from local disk path to avoid loading zip bytes in memory
+        zip_file = zipfile.ZipFile(zip_path)
         file_list = zip_file.namelist()
         
         # Filter valid files
@@ -80,6 +81,9 @@ def process_media_zip(zip_bytes: bytes, project_id: str, dataset_id: str) -> dic
         failed_items = 0
         failed_batches = 0
         BATCH_SIZE = 100
+
+        # Limit memory footprint: at most 15 files read into RAM at any one time (10 active threads + 5 queue buffer)
+        semaphore = BoundedSemaphore(15)
 
         def flush_media_batch(is_last: bool = False):
             nonlocal failed_batches
@@ -120,13 +124,22 @@ def process_media_zip(zip_bytes: bytes, project_id: str, dataset_id: str) -> dic
             progress_logger.complete(result)
             return result
 
+        def upload_worker(r2_key, data, content_type, split):
+            try:
+                return r2_service.upload_file(r2_key, data, content_type, split)
+            finally:
+                semaphore.release()
+
         # Thread pool to speed up R2 uploads
         with ThreadPoolExecutor(max_workers=10) as upload_executor:
             futures = {}
             for name, ext, mime in valid_files:
+                semaphore.acquire() # block if we already have 15 files loaded in memory
+                
                 try:
                     file_data = zip_file.read(name)
                 except Exception as e:
+                    semaphore.release()
                     logger.error(f"Failed to read file {name} from zip: {e}")
                     failed_items += 1
                     continue
@@ -136,7 +149,7 @@ def process_media_zip(zip_bytes: bytes, project_id: str, dataset_id: str) -> dic
                 
                 # Submit R2 upload in background
                 future = upload_executor.submit(
-                    r2_service.upload_file, r2_key, file_data, mime, split_type
+                    upload_worker, r2_key, file_data, mime, split_type
                 )
                 futures[future] = {
                     "name": name,

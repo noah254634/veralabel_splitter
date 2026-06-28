@@ -20,7 +20,7 @@ def fast_split(line: str) -> str:
         return 'validation'
     return 'test'
 
-def process_text_file(file_bytes: bytes, project_id: str, dataset_id: str) -> dict:
+def process_text_file(file_path: str, project_id: str, dataset_id: str) -> dict:
     """
     Process plain text or JSONL dataset, splitting by line, uploading to R2, and registering batches.
     """
@@ -28,7 +28,8 @@ def process_text_file(file_bytes: bytes, project_id: str, dataset_id: str) -> di
     progress_logger.log("Starting text file processing (Python FastAPI)")
     
     try:
-        content = file_bytes.decode('utf-8', errors='ignore')
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
         lines = content.split('\n')
         
         # Filter valid non-empty lines

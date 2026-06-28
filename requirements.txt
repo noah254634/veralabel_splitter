@@ -5,3 +5,6 @@ motor
 boto3
 aiofiles
 python-multipart
+scipy
+pillow
+

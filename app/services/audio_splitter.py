@@ -90,16 +90,17 @@ def slice_wav_file(file_data: bytes, chunk_duration_sec: float) -> list[tuple[by
     finally:
         wav_in.close()
 
-def process_audio_zip(zip_bytes: bytes, project_id: str, dataset_id: str) -> dict:
+def process_audio_zip(zip_path: str, project_id: str, dataset_id: str) -> dict:
     """
     Process zipped audio dataset, extracting, uploading to R2, and registering batches.
     """
+    from threading import BoundedSemaphore
     progress_logger = ProgressLogger(project_id, dataset_id)
     progress_logger.log("Starting audio ZIP processing (Python FastAPI)")
     
     try:
-        # Load zip in memory
-        zip_file = zipfile.ZipFile(io.BytesIO(zip_bytes))
+        # Open zip directly from local disk path to avoid loading zip bytes in memory
+        zip_file = zipfile.ZipFile(zip_path)
         file_list = zip_file.namelist()
         
         # Filter valid files
@@ -121,6 +122,9 @@ def process_audio_zip(zip_bytes: bytes, project_id: str, dataset_id: str) -> dic
         failed_items = 0
         failed_batches = 0
         BATCH_SIZE = 100
+
+        # Limit memory footprint: at most 15 chunk buffers loaded in memory at any one time
+        semaphore = BoundedSemaphore(15)
 
         def flush_audio_batch(is_last: bool = False):
             nonlocal failed_batches
@@ -148,81 +152,84 @@ def process_audio_zip(zip_bytes: bytes, project_id: str, dataset_id: str) -> dic
             else:
                 progress_logger.log(f"[Audio] Batch registered successfully", {"taskCount": len(buffer_to_flush)})
 
-        # Prepare upload items (either sliced wav or original files)
-        upload_items = []
-        for name, ext in valid_files:
+        def upload_worker(r2_key, data, content_type, split):
             try:
-                file_data = zip_file.read(name)
-            except Exception as e:
-                logger.error(f"Failed to read file {name} from zip: {e}")
-                failed_items += 1
-                continue
-
-            sliced_chunks = []
-            if ext == 'wav' and settings.AUDIO_CHUNK_DURATION > 0:
-                sliced_chunks = slice_wav_file(file_data, settings.AUDIO_CHUNK_DURATION)
-
-            if sliced_chunks:
-                # Keep subdirectories if present, but swap backslashes for forward slashes
-                dir_name, file_base = os.path.split(name)
-                base_name, file_ext = os.path.splitext(file_base)
-                for idx, (chunk_bytes, chunk_duration) in enumerate(sliced_chunks):
-                    chunk_name = os.path.join(dir_name, f"{base_name}_chunk_{idx}{file_ext}").replace("\\", "/")
-                    upload_items.append({
-                        "name": chunk_name,
-                        "original_name": name,
-                        "file_data": chunk_bytes,
-                        "ext": ext,
-                        "is_sliced": True,
-                        "chunk_index": idx,
-                        "duration": chunk_duration
-                    })
-            else:
-                upload_items.append({
-                    "name": name,
-                    "original_name": name,
-                    "file_data": file_data,
-                    "ext": ext,
-                    "is_sliced": False,
-                    "chunk_index": 0,
-                    "duration": 0.0
-                })
-
-        total_uploads = len(upload_items)
-        progress_logger.log(f"Prepared upload queue: {total_uploads} total items (after potential slicing)")
-
-        if total_uploads == 0:
-            progress_logger.checkpoint("flushed_final_batch", {"totalCount": 0, "failedItems": failed_items, "failedBatches": failed_batches})
-            result = {
-                "success": True,
-                "processed": 0,
-                "datasetId": dataset_id,
-                "failedBatches": 0,
-                "failedItems": failed_items,
-                "message": "No valid audio files to process"
-            }
-            progress_logger.complete(result)
-            return result
+                return r2_service.upload_file(r2_key, data, content_type, split)
+            finally:
+                semaphore.release()
 
         # Thread pool for R2 uploads
         with ThreadPoolExecutor(max_workers=10) as upload_executor:
             futures = {}
-            for item in upload_items:
-                split_type = fast_split(item["original_name"]) # keeps chunks of same file in same split
-                content_type = get_audio_mime_type(item["ext"])
-                r2_key = f"projects/{project_id}/{dataset_id}/{split_type}/{item['name']}"
-                
-                # Submit R2 upload in background
-                future = upload_executor.submit(
-                    r2_service.upload_file, r2_key, item["file_data"], content_type, split_type
-                )
-                futures[future] = {
-                    "name": item["name"],
-                    "r2_key": r2_key,
-                    "split_type": split_type,
-                    "content_type": content_type,
-                    "size": len(item["file_data"])
+            
+            # Read files one-by-one and submit tasks iteratively to keep memory footprint bounded
+            for name, ext in valid_files:
+                try:
+                    file_data = zip_file.read(name)
+                except Exception as e:
+                    logger.error(f"Failed to read file {name} from zip: {e}")
+                    failed_items += 1
+                    continue
+
+                sliced_chunks = []
+                if ext == 'wav' and settings.AUDIO_CHUNK_DURATION > 0:
+                    sliced_chunks = slice_wav_file(file_data, settings.AUDIO_CHUNK_DURATION)
+
+                if sliced_chunks:
+                    dir_name, file_base = os.path.split(name)
+                    base_name, file_ext = os.path.splitext(file_base)
+                    
+                    for idx, (chunk_bytes, chunk_duration) in enumerate(sliced_chunks):
+                        semaphore.acquire() # block if we already have 15 chunks in memory
+                        
+                        chunk_name = os.path.join(dir_name, f"{base_name}_chunk_{idx}{file_ext}").replace("\\", "/")
+                        split_type = fast_split(name) # keep chunks of same file in same split
+                        content_type = get_audio_mime_type(ext)
+                        r2_key = f"projects/{project_id}/{dataset_id}/{split_type}/{chunk_name}"
+                        
+                        future = upload_executor.submit(
+                            upload_worker, r2_key, chunk_bytes, content_type, split_type
+                        )
+                        futures[future] = {
+                            "name": chunk_name,
+                            "r2_key": r2_key,
+                            "split_type": split_type,
+                            "content_type": content_type,
+                            "size": len(chunk_bytes)
+                        }
+                else:
+                    semaphore.acquire() # block if we already have 15 chunks in memory
+                    
+                    split_type = fast_split(name)
+                    content_type = get_audio_mime_type(ext)
+                    r2_key = f"projects/{project_id}/{dataset_id}/{split_type}/{name}"
+                    
+                    future = upload_executor.submit(
+                        upload_worker, r2_key, file_data, content_type, split_type
+                    )
+                    futures[future] = {
+                        "name": name,
+                        "r2_key": r2_key,
+                        "split_type": split_type,
+                        "content_type": content_type,
+                        "size": len(file_data)
+                    }
+
+            total_uploads = len(futures)
+            progress_logger.log(f"Prepared upload queue: {total_uploads} total items (after potential slicing)")
+
+            if total_uploads == 0:
+                progress_logger.checkpoint("flushed_final_batch", {"totalCount": 0, "failedItems": failed_items, "failedBatches": failed_batches})
+                result = {
+                    "success": True,
+                    "processed": 0,
+                    "datasetId": dataset_id,
+                    "failedBatches": 0,
+                    "failedItems": failed_items,
+                    "message": "No valid audio files to process"
                 }
+                progress_logger.complete(result)
+                return result
 
             # Gather upload tasks as they complete
             processed_count = 0

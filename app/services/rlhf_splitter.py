@@ -54,7 +54,7 @@ def parse_json_or_jsonl(content_str: str) -> list:
             
     return parsed_items
 
-def process_rlhf_file(file_bytes: bytes, project_id: str, dataset_id: str) -> dict:
+def process_rlhf_file(file_path: str, project_id: str, dataset_id: str) -> dict:
     """
     Process RLHF prompt-responses dataset (JSON/JSONL), validating, uploading normalized JSON records to R2, and registering batches.
     """
@@ -62,7 +62,8 @@ def process_rlhf_file(file_bytes: bytes, project_id: str, dataset_id: str) -> di
     progress_logger.log("Starting RLHF file processing (Python FastAPI)")
     
     try:
-        content = file_bytes.decode('utf-8', errors='ignore')
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
         entries = parse_json_or_jsonl(content)
         
         # Parse and validate entries

@@ -1,10 +1,14 @@
+# pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, BackgroundTasks, status
+# pyrefly: ignore [missing-import]
 from fastapi.responses import JSONResponse
 from app.schemas.dataset import SplitJobRequest
 from app.schemas.assembler import AssembleRequest, AssembleResponse
+from app.schemas.consensus import ConsensusRequest, ConsensusResponse
 from app.core.security import verify_signature
 from app.services.splitter_service import splitter_service
 from app.services.assembler_service import assembler_service
+from app.services.consensus_service import consensus_service
 import logging
 
 logger = logging.getLogger("veralabel-splitter")
@@ -66,5 +70,19 @@ def assemble_dataset(
         r2Key=result.get("r2Key"),
         sizeBytes=result.get("sizeBytes")
     )
+
+@router.post("/consensus/evaluate", response_model=ConsensusResponse)
+def evaluate_consensus(
+    payload: ConsensusRequest,
+    _signature: str = Depends(verify_signature)
+):
+    """
+    HTTP route handler triggered by the backend to evaluate consensus (IoU, agreement, outliers)
+    across multiple submissions of a task.
+    """
+    logger.info(f"Received consensus evaluation request for {len(payload.tasks)} tasks.")
+    result = consensus_service.evaluate(payload)
+    return result
+
 
 

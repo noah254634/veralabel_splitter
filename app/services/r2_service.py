@@ -51,6 +51,37 @@ class R2Service:
             logger.error(f"Failed to download key {r2_key} from R2: {e}")
             raise e
 
+    def download_file_to_disk(self, r2_key: str, dest_path: str, download_url: str = None) -> None:
+        """
+        Download a file to disk path chunk-by-chunk using a presigned URL or directly via s3 client.
+        """
+        if download_url:
+            logger.info(f"Downloading key {r2_key} from presigned URL to disk: {dest_path}")
+            try:
+                with urllib.request.urlopen(download_url, timeout=60) as response:
+                    with open(dest_path, 'wb') as out_file:
+                        chunk_size = 1024 * 1024 # 1MB chunks
+                        while True:
+                            chunk = response.read(chunk_size)
+                            if not chunk:
+                                break
+                            out_file.write(chunk)
+                return
+            except Exception as e:
+                logger.error(f"Failed to download file from download_url to disk: {e}")
+                if not self.s3_client:
+                    raise e
+
+        if not self.s3_client:
+            raise ValueError("S3 client not initialized and no downloadUrl provided")
+
+        logger.info(f"Downloading key {r2_key} directly from R2 bucket {self.bucket_name} to disk {dest_path}")
+        try:
+            self.s3_client.download_file(self.bucket_name, r2_key, dest_path)
+        except Exception as e:
+            logger.error(f"Failed to download key {r2_key} directly to disk: {e}")
+            raise e
+
     def upload_file(self, r2_key: str, body: bytes, content_type: str, split_type: str) -> bool:
         """
         Upload extracted file directly to R2 bucket with appropriate metadata.

@@ -4,10 +4,10 @@ services:
   splitter:
     build: .
     ports:
-      - "8000:8000"
+      - "8002:8002"
     env_file:
       - .env
     volumes:
       - .:/app
     environment:
-      - PORT=8000
+      - PORT=8002

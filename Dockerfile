@@ -4,7 +4,10 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-WORKDIR /app
+# Create a non-root user with UID 1000 for Hugging Face compatibility
+RUN useradd -m -u 1000 user
+
+WORKDIR /home/user/app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -12,14 +15,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install python dependencies
-COPY requirements.txt .
+COPY --chown=user:user requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application
-COPY . .
+# Copy application files and set ownership to user 1000
+COPY --chown=user:user . .
 
-# Expose port (FastAPI typically binds to 8000 or PORT env var)
-EXPOSE 8000
+USER user
 
-# Start app using uvicorn (respecting PORT environment variable commonly set by hosts)
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Expose port 7860 (Hugging Face Spaces default port)
+EXPOSE 7860
+
+# Start app using uvicorn (binding to the dynamic PORT environment variable with fallback to 7860)
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-7860}"]

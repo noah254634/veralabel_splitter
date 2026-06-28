@@ -99,10 +99,10 @@ AUDIO_CHUNK_DURATION=30.0
 
 3. **Start the Development Server:**
    ```bash
-   uvicorn main:app --reload --port 8000
+   uvicorn main:app --reload --port 8002
    ```
-   * Interactive OpenAPI docs: `http://localhost:8000/docs`
-   * Health status endpoint: `http://localhost:8000/api/v1/health`
+   * Interactive OpenAPI docs: `http://localhost:8002/docs`
+   * Health status endpoint: `http://localhost:8002/api/v1/health`
 
 ---
 
@@ -117,5 +117,5 @@ docker-compose up --build
 ### Production Build
 ```bash
 docker build -t veralabel-splitter .
-docker run -p 8000:8000 --env-file .env veralabel-splitter
+docker run -p 8002:8002 --env-file .env veralabel-splitter
 ```

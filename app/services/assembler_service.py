@@ -111,6 +111,70 @@ def run_bounding_box_consensus(submissions: List[Dict[str, Any]]) -> List[Dict[s
 
     return consensus_boxes
 
+def run_polygon_consensus(submissions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Merges polygons across multiple submissions using bounding box IoU clustering.
+    Picks the polygon from the highest-trust labeller in each cluster.
+    """
+    # Flatten all polygons from all submissions, tracking trust score
+    all_polygons = []
+    for sub in submissions:
+        trust = max(float(sub.get('trust', 0.5)), 0.1)
+        sub_polygons = sub.get('annotation', {}).get('polygons')
+        if sub_polygons and isinstance(sub_polygons, list):
+            for poly_item in sub_polygons:
+                if isinstance(poly_item, dict):
+                    points = poly_item.get('polygon')
+                    if points and isinstance(points, list) and len(points) >= 3:
+                        # Compute bounding box for IoU matching
+                        xs = [float(pt[0]) for pt in points if len(pt) >= 2]
+                        ys = [float(pt[1]) for pt in points if len(pt) >= 2]
+                        if xs and ys:
+                            x_min, x_max = min(xs), max(xs)
+                            y_min, y_max = min(ys), max(ys)
+                            all_polygons.append({
+                                'polygon': points,
+                                'label': str(poly_item.get('label', '')).strip(),
+                                'bbox': {'x': x_min, 'y': y_min, 'w': x_max - x_min, 'h': y_max - y_min},
+                                'trust': trust
+                            })
+
+    if not all_polygons:
+        return []
+
+    # Group by label
+    by_label = {}
+    for poly in all_polygons:
+        label = poly['label']
+        if label not in by_label:
+            by_label[label] = []
+        by_label[label].append(poly)
+
+    consensus_polygons = []
+    for label, label_polys in by_label.items():
+        # Cluster polygons based on bounding box IoU
+        clusters = []
+        for item in label_polys:
+            placed = False
+            for cluster in clusters:
+                avg_iou = sum(compute_iou(item['bbox'], c_item['bbox']) for c_item in cluster) / len(cluster)
+                if avg_iou >= 0.5:
+                    cluster.append(item)
+                    placed = True
+                    break
+            if not placed:
+                clusters.append([item])
+
+        for cluster in clusters:
+            # Pick the polygon of the highest-trust labeller in the cluster
+            best_poly = max(cluster, key=lambda p: p['trust'])
+            consensus_polygons.append({
+                'label': label,
+                'polygon': best_poly['polygon']
+            })
+
+    return consensus_polygons
+
 def run_classification_consensus(submissions: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Resolves classification label via majority vote and trust score tie-breaker.
@@ -367,7 +431,15 @@ class AssemblerService:
             elif method == "rlhf":
                 consensus_result = run_rlhf_consensus(task_submissions)
             elif method == "annotation" and str(payload.data_type).lower().strip() == "image":
-                consensus_result = {'boundingBoxes': run_bounding_box_consensus(task_submissions)}
+                consensus_result = {}
+                has_boxes = any(s.get('annotation', {}).get('boundingBoxes') for s in task_submissions)
+                has_polys = any(s.get('annotation', {}).get('polygons') for s in task_submissions)
+                if has_boxes:
+                    consensus_result['boundingBoxes'] = run_bounding_box_consensus(task_submissions)
+                if has_polys:
+                    consensus_result['polygons'] = run_polygon_consensus(task_submissions)
+                if not has_boxes and not has_polys:
+                    consensus_result['boundingBoxes'] = []
             else:
                 # Fallback: simple merge/list of annotations
                 consensus_result = {
