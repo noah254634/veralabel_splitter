@@ -20,9 +20,13 @@ def register_tasks_with_backend(payload: dict) -> dict:
         logger.warning("BACKEND_API not configured. Skipping backend task registration.")
         return {"ok": False, "reason": "missing_backend_api"}
 
-    # Resolve register endpoint
+    # Resolve register endpoint defensively
     base_api = backend_api.rstrip('/')
     base_api = re.sub(r'(/createTasks|/register-task|/register|/progress)$', '', base_api, flags=re.IGNORECASE)
+    
+    if '/api/v1' not in base_api:
+        base_api = f"{base_api}/api/v1"
+        
     if not base_api.endswith('/tasks'):
         base_api = f"{base_api}/tasks"
     endpoint = f"{base_api}/register"

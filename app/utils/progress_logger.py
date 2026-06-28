@@ -103,11 +103,15 @@ class ProgressLogger:
             logger.info("Backend API not configured, logging events locally only")
             return
 
-        # Format endpoint (must target /tasks/progress)
+        # Format endpoint (must target /tasks/progress) defensively
         base_api = self.backend_api.rstrip('/')
         # Strip tasks endpoints if present to construct base tasks path
         import re
         base_api = re.sub(r'(/createTasks|/register-task|/register|/progress)$', '', base_api, flags=re.IGNORECASE)
+        
+        if '/api/v1' not in base_api:
+            base_api = f"{base_api}/api/v1"
+            
         if not base_api.endswith('/tasks'):
             base_api = f"{base_api}/tasks"
         url = f"{base_api}/progress"
